@@ -37,8 +37,8 @@ testMatchAccept = testGroup "matchAccept"
         qs     <- replicateM (length server) $ choose (1, 1000)
         let client = zipWith Quality server qs
             qmax v q = if qualityValue q > qualityValue v then q else v
-        return $ matchAccept server (qToBS client) ==
-            Just (qualityData $ foldr1 qmax client)
+            accepted = matchAccept server =<< parseQuality (qToBS client)
+        return $ accepted == Just (qualityData $ foldr1 qmax client)
     , testProperty "Most specific" $ do
         media <- genConcreteMediaType
         let client = qToBS $ map maxQuality
@@ -47,30 +47,35 @@ testMatchAccept = testGroup "matchAccept"
                 , media { parameters = empty }
                 , media
                 ]
-        return $ matchAccept [media] client == Just media
+            accepted = matchAccept [media] =<< parseQuality client
+        return $ accepted == Just media
     , testProperty "Nothing" $ do
         server <- genServer
         client <- listOf1 $ genDiffMediaTypesWith genConcreteMediaType server
         let client' = filter (not . flip any server . matches) client
-        return . isNothing $ matchAccept server
-            (qToBS $ map maxQuality client')
+            parsed = parseQuality $ qToBS $ map maxQuality client'
+        return . isNothing $ matchAccept server =<< parsed
     , testProperty "Never chooses q=0" $ do
         server <- genServer
-        return . isNothing $
-            matchAccept server (qToBS $ map minQuality server)
+        let parsed = parseQuality $ qToBS $ map minQuality server
+        return . isNothing $ matchAccept server =<< parsed
+            
     , testProperty "Left biased" $ do
         server <- genServer
         let client = qToBS $ map maxQuality server
-        return $ matchAccept server client == Just (head server)
+            accepted = matchAccept server =<< parseQuality client
+        return $ accepted == Just (head server)
     , testProperty "Against */*" $ do
         server <- genServer
         let stars = "*/*" :: ByteString
-        return $ matchAccept server (qToBS [maxQuality stars]) ==
+            accepted = matchAccept server =<< parseQuality (qToBS [maxQuality stars])
+        return $ accepted ==
             Just (head server)
     , testProperty "Against type/*" $ do
         server <- genServer
         let client = qToBS [maxQuality (subStarOf $ head server)]
-        return $ matchAccept server client == Just (head server)
+            accepted = matchAccept server =<< parseQuality client
+        return $ accepted == Just (head server)
     ]
 
 
@@ -83,12 +88,14 @@ testMapAccept = testGroup "mapAccept"
         let client = zipWith Quality server qs
             qmax q v = if qualityValue q >= qualityValue v then q else v
             zipped = zip server server
-        return $ mapAccept zipped (qToBS client) ==
+            accepted = mapAccept zipped =<< parseQuality (qToBS client)
+        return $ accepted ==
             Just (qualityData $ foldr1 qmax client)
     , testProperty "Nothing" $ do
         (server, client) <- genServerAndClient
         let zipped = zip server $ repeat ()
-        return . isNothing $ mapAccept zipped (qToBS $ map maxQuality client)
+            parsed = parseQuality (qToBS $ map maxQuality client)
+        return . isNothing $ mapAccept zipped =<< parsed
     ]
 
 
@@ -103,22 +110,26 @@ testMatchContent = testGroup "matchContent"
                 , media { parameters = empty }
                 , media
                 ]
-        return $ matchAccept [media] client == Just media
+            accepted = matchAccept [media] =<< parseQuality client
+        return $ accepted == Just media
     , testProperty "Nothing" $ do
         (server, client) <- genServerAndClient
         let client' = filter (not . flip any server . matches) client
-        return . isNothing $ matchAccept server (toBS client')
+            accepted = matchAccept server =<< parseQuality (toBS client')
+        return $ isNothing accepted
     , testProperty "Left biased" $ do
         server <- genServer
-        return $ matchAccept server (toBS server) == Just (head server)
+        let accepted = matchAccept server =<< parseQuality (toBS server)
+        return $ accepted == Just (head server)
     , testProperty "Against */*" $ do
         server <- genServer
         let stars = "*/*" :: ByteString
-        return $ matchAccept server (toBS [stars]) == Just (head server)
+            accepted = matchAccept server =<< parseQuality (toBS [stars])
+        return $ accepted == Just (head server)
     , testProperty "Against type/*" $ do
         server <- genServer
-        let client = toBS [subStarOf $ head server]
-        return $ matchAccept server client == Just (head server)
+        let client = parseQuality $ toBS [subStarOf $ head server]
+        return $ (matchAccept server =<< client) == Just (head server)
     ]
 
 
@@ -128,12 +139,14 @@ testMapContent = testGroup "mapContent"
     [ testProperty "Matches" $ do
         server <- genServer
         let zipped = zip server server
-        return $ mapAccept zipped (toBS server) == listToMaybe server
+            accepted = mapAccept zipped =<< parseQuality (toBS server)
+        return $ accepted == listToMaybe server
     , testProperty "Nothing" $ do
         server <- genServer
         client <- listOf1 $ genDiffMediaTypesWith genConcreteMediaType server
         let zipped = zip server $ repeat ()
-        return . isNothing $ mapAccept zipped (toBS client)
+            accepted = mapAccept zipped =<< parseQuality (toBS client)
+        return $ isNothing accepted
     ]
 
 

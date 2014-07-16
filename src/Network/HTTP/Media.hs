@@ -11,7 +11,10 @@ module Network.HTTP.Media
     , parameters
     , (/?)
     , (/.)
+
+    -- * Quality Values
     , Quality
+    , parseQuality
 
     -- * Accept matching
     , matchAccept
@@ -55,16 +58,15 @@ import Network.HTTP.Media.Utils
 -- 'MediaType' for the standard Accept header or 'ByteString' for any other
 -- Accept header which can be marked with a quality value.
 --
--- > matchAccept ["text/html", "application/json"] <$> getHeader
+-- > getHeader >>= parseQuality >>= matchAccept ["text/html", "application/json"]
 --
 -- For more information on the matching process see RFC 2616, section 14.1-4.
 matchAccept
     :: Accept a
     => [a]         -- ^ The server-side options
-    -> ByteString  -- ^ The client-side header value
+    -> [Quality a]  -- ^ The client-side header value
     -> Maybe a
-matchAccept options accept = do
-    acceptq <- parseQuality accept
+matchAccept options acceptq = do
     let merge (Quality c q) = map (`Quality` q) $ filter (`matches` c) options
         matched = concatMap merge acceptq
         (hq, qs) = foldr qfold (0, []) matched
@@ -83,14 +85,14 @@ matchAccept options accept = do
 -- mapped to another value. Convenient for specifying how to translate the
 -- resource into each of its available formats.
 --
--- > getHeader >>= maybe render406Error renderResource . mapAccept
+-- > maybe render406Error renderResource $ getHeader >>= parseQuality >>= mapAccept
 -- >     [ ("text" // "html",        asHtml)
 -- >     , ("application" // "json", asJson)
 -- >     ]
 mapAccept
     :: Accept a
     => [(a, b)]    -- ^ The map of server-side preferences to values
-    -> ByteString  -- ^ The client-side header value
+    -> [Quality a] -- ^ The client-side header value
     -> Maybe b
 mapAccept options accept =
     matchAccept (map fst options) accept >>= lookupMatches options
@@ -100,13 +102,13 @@ mapAccept options accept =
 -- | A specialisation of 'mapAccept' that only takes MediaType as its input,
 -- to avoid ambiguous-type errors when using string literal overloading.
 --
--- > getHeader >>= maybe render406Error renderResource . mapAcceptMedia
+-- > maybe render406Error renderResource $ getHeader >>= parseQuality >>= mapAcceptMedia
 -- >     [ ("text/html",        asHtml)
 -- >     , ("application/json", asJson)
 -- >     ]
 mapAcceptMedia ::
-    [(MediaType, b)]  -- ^ The map of server-side preferences to values
-    -> ByteString     -- ^ The client-side header value
+    [(MediaType, b)]       -- ^ The map of server-side preferences to values
+    -> [Quality MediaType] -- ^ The client-side header value
     -> Maybe b
 mapAcceptMedia = mapAccept
 
@@ -115,13 +117,13 @@ mapAcceptMedia = mapAccept
 -- | A specialisation of 'mapAccept' that only takes ByteString as its input,
 -- to avoid ambiguous-type errors when using string literal overloading.
 --
--- > getHeader >>= maybe render406Error encodeResourceWith . mapAcceptBytes
+-- > maybe render406Error encodeResourceWith $ getHeader >>= parseQuality >>= mapAcceptBytes
 -- >     [ ("compress", compress)
 -- >     , ("gzip",     gzip)
 -- >     ]
 mapAcceptBytes ::
-    [(ByteString, b)]  -- ^ The map of server-side preferences to values
-    -> ByteString      -- ^ The client-side header value
+    [(ByteString, b)]       -- ^ The map of server-side preferences to values
+    -> [Quality ByteString] -- ^ The client-side header value
     -> Maybe b
 mapAcceptBytes = mapAccept
 
@@ -131,18 +133,18 @@ mapAcceptBytes = mapAccept
 -- content value. A result of 'Nothing' means that nothing matched (which
 -- should indicate a 415 error).
 --
--- > matchContent ["application/json", "text/plain"] <$> getContentType
+-- > matchContent ["application/json", "text/plain"] =<< parseAccept =<< getContentType
 --
 -- For more information on the matching process see RFC 2616, section 14.17.
 matchContent
     :: Accept a
     => [a]         -- ^ The server-side response options
-    -> ByteString  -- ^ The client's request value
+    -> a  -- ^ The client's request value
     -> Maybe a
 matchContent options ctype = foldl choose Nothing options
   where
     choose m server = m <|> do
-        parseAccept ctype >>= guard . (`matches` server)
+        guard $ ctype `matches` server
         Just server
 
 
@@ -150,14 +152,14 @@ matchContent options ctype = foldl choose Nothing options
 -- | The equivalent of 'matchContent' above, except the resulting choice is
 -- mapped to another value.
 --
--- > getContentType >>= maybe send415Error readRequestBodyWith . mapContent
+-- > maybe send415Error readRequestBodyWith $ getContentType >>= parseAccept >>= mapContent
 -- >     [ ("application" // "json", parseJson)
 -- >     , ("text" // "plain",       parseText)
 -- >     ]
 mapContent
     :: Accept a
     => [(a, b)]    -- ^ The map of server-side responses
-    -> ByteString  -- ^ The client request's header value
+    -> a           -- ^ The client request's header value
     -> Maybe b
 mapContent options ctype =
     matchContent (map fst options) ctype >>= lookupMatches options
@@ -167,20 +169,20 @@ mapContent options ctype =
 -- | A specialisation of 'mapContent' that only takes MediaType as its input,
 -- to avoid ambiguous-type errors when using string literal overloading.
 --
--- > getContentType >>=
+-- > getContentType >>= parseAccept >>=
 -- >     maybe send415Error readRequestBodyWith . mapContentMedia
 -- >         [ ("application/json", parseJson)
 -- >         , ("text/plain",       parseText)
 -- >         ]
 mapContentMedia
     :: [(MediaType, b)]  -- ^ The map of server-side responses
-    -> ByteString        -- ^ The client request's header value
+    -> MediaType         -- ^ The client request's header value
     -> Maybe b
 mapContentMedia = mapContent
 
 
 ------------------------------------------------------------------------------
--- | Parses a full Accept header into a list of quality-valued media types.
+-- | Parses a full Accept-* header into a list of quality-valued media types.
 parseQuality :: Accept a => ByteString -> Maybe [Quality a]
 parseQuality = (. split comma) . mapM $ \bs ->
     let (accept, q) = BS.breakSubstring ";q=" $ BS.filter (/= space) bs
